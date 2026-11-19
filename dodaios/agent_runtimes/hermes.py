@@ -430,15 +430,24 @@ class HermesRuntime:
     def prepare_command(self) -> tuple[list[str], dict[str, str]] | None:
         """Build the shared root's dependency environment ahead of the first turn.
 
-        ``hermes profile list`` passes through Hermes' launch preparation (a
-        version query skips it), which syncs the data root's environment once
-        per Hermes build; afterwards every agent's first turn starts at once.
+        A real command passes through Hermes' launch preparation (a version
+        query skips it), syncing the shared environment once per Hermes build.
         """
         binary = _binary()
         if binary is None:
             return None
         home = profile_home(_SETUP_KEY)
-        return [binary, "profile", "list"], child_env({"HERMES_HOME": str(home)})
+        env = child_env({"HERMES_HOME": str(home)})
+        args = ["profile", "list"]
+        if is_windows():
+            # uv must trust the same Windows certificate store as Hermes.
+            env["UV_NATIVE_TLS"] = "1"
+            version = parse_version(self.detect(fast=True).version)
+            if version is not None and version >= (0, 21, 5):
+                # The full CLI can fault in the bundled Windows Python after
+                # a fresh dependency sync. The launcher can check ACP directly.
+                args = ["--run-module", "acp_adapter", "--check"]
+        return [binary, *args], env
 
     def busy(self) -> bool:
         return self._slots.busy()

@@ -185,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
                 problems.append(f"{name}: turn 1 took {took:.1f} s >= {budget:.0f} s")
 
     code, _ = _run([sys.executable, "-m", "pytest", "tests/unit/agent_runtimes", "-q",
-                    "-p", "no:cacheprovider"], env)
+                    "-p", "no:cacheprovider"], dict(env, JARVIS_INSTANCE="default"))
     if code != 0:
         problems.append(f"pytest tests/unit/agent_runtimes exited {code}")
 

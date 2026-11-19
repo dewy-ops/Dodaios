@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import socket
 import sys
-import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -36,8 +35,12 @@ sys.path.insert(0, str(ROOT / "scripts" / "spikes"))
 from agent_runtimes_e2e import (  # noqa: E402
     _report,
     _run,
+    finish_profile,
     keep_user_path,
     prepare,
+    probe_directory,
+    probe_runtimes_root,
+    recovered_turn,
     user_path_snapshot,
 )
 
@@ -197,25 +200,23 @@ async def main(name: str, provider: str, wanted: str) -> int:
 
         runner_api.build_brain = lambda provider, model: ReplayRuntimeBrain()
     try:
-        with tempfile.TemporaryDirectory(prefix=f"jarvis-{name}-gateway-e2e-") as directory:
-            tmp = Path(directory)
-            base.runtimes_root = lambda: tmp / "agent_runtimes"
+        tmp = probe_directory(name, "gateway")
+        base.runtimes_root = lambda: probe_runtimes_root(tmp)
+        result = 1
+        try:
             ledger.set_ledger_path(tmp / "usage.db")
             gateway._CATALOG = ModelCatalog(cache_path=tmp / "catalog.json")
-            result = 1
-            try:
-                result = await _check(name, provider, wanted, tmp, replay=replay)
-                return result
-            finally:
-                await driver(name).stop()
-                await asyncio.to_thread(ledger.flush)
-                # Gateway calls are metered: the ledger writer holds usage.db in
-                # this folder open, so it is closed (pointed back) before the
-                # folder is removed — on Windows an open file blocks that.
-                await asyncio.to_thread(ledger.set_ledger_path, previous_ledger)
-                gateway._CATALOG = previous_catalog
-                if result != 0:
-                    _keep_diagnostics(name, tmp)
+            result = await _check(name, provider, wanted, tmp, replay=replay)
+            return result
+        finally:
+            await driver(name).stop()
+            await asyncio.to_thread(ledger.flush)
+            # The ledger writer holds usage.db open until its path is restored.
+            await asyncio.to_thread(ledger.set_ledger_path, previous_ledger)
+            gateway._CATALOG = previous_catalog
+            if result != 0:
+                _keep_diagnostics(name, tmp)
+            finish_profile(tmp, result)
     finally:
         gateway._client = previous_client
         gateway.subscription_ready = previous_ready
@@ -229,7 +230,8 @@ async def main(name: str, provider: str, wanted: str) -> int:
 def _keep_diagnostics(name: str, tmp: Path) -> None:
     """Retain the runtime's stderr and its own log files (Hermes writes the
     model call's failure to ``logs/*.log`` in its home, not to stderr)."""
-    logs = [tmp / "runtime-stderr.log", *sorted((tmp / "agent_runtimes").rglob("*.log"))]
+    logs = [tmp / "prepare.log", tmp / "runtime-stderr.log",
+            *sorted(probe_runtimes_root(tmp).rglob("*.log"))]
     parts = [
         f"===== {log.relative_to(tmp)} =====\n".encode() + log.read_bytes()
         for log in logs
@@ -311,12 +313,10 @@ async def _turns(name, provider, wanted, workspace, port, *, replay):
     _report("turn 2 (warm process)", io2)
     # The app restarted: the chat is opened, the runtime warms up (OpenClaw:
     # Gateway, bridge and a warm-up run answered by the gateway itself).
-    await driver(name).stop()
     turn.resume = second.vendor_session
-    warmed = time.monotonic()
-    ready = await driver(name).warm(turn)
-    print(f"warm-up: {ready} in {time.monotonic() - warmed:.1f} s")
-    third, io3 = await _run(name, turn, "Which word did I ask you to remember? One word.")
+    ready, third, io3 = await recovered_turn(
+        name, turn, "Which word did I ask you to remember? One word."
+    )
     print("turn 3:", third.status, third.error, repr(third.result_text[:120]))
     _report("turn 3 (after warm-up)", io3)
     await driver(name).stop()
@@ -325,6 +325,12 @@ async def _turns(name, provider, wanted, workspace, port, *, replay):
         and second.status == "done"
         and third.status == "done"
         and "pelican" in second.result_text.lower()
+        and (name != "hermes" or (
+            bool(first.vendor_session)
+            and first.vendor_session == second.vendor_session == third.vendor_session
+            and ready
+            and "pelican" in third.result_text.lower()
+        ))
     )
     print("RESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1

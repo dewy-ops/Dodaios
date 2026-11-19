@@ -575,6 +575,9 @@ model through Dodaios' own drivers (profile and config writing, process
 environment, the OpenClaw Gateway supervisor): two turns in one conversation,
 no key written into the runtime's folder, no process left behind.
 
+On Windows, Hermes 0.21.5 diagnostics and the E2E recovery policy are retained
+in [the Hermes Python access-violation record](diagnostics/hermes-windows-python314-access-violation.md).
+
 ## CI and release gates
 
 A change the `agent_runtimes` lane covers (the runtimes, the chat and society
