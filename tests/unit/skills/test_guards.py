@@ -14,6 +14,8 @@ for "why didn't my skill fire?").
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from dodaios.skills import guards
@@ -138,6 +140,10 @@ def test_definitional_guard_needs_the_raw_span_not_a_normalized_token() -> None:
 
 def test_definitional_predicate_cache_is_bounded() -> None:
     """The compiled-pattern cache must not grow without bound."""
+    # This test deliberately compiles more than 512 unique expressions. Keep
+    # that stress isolated from CPython's separate process-global regex cache;
+    # its eviction state depends on whichever tests ran first.
+    re.purge()
     guards._PREDICATE_CACHE.clear()
     for index in range(guards._PREDICATE_CACHE_MAX + 25):
         guards.is_definitional_question_about(f"was ist tok{index}", f"tok{index}")

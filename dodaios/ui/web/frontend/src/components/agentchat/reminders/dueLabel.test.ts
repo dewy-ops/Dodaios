@@ -15,5 +15,6 @@ describe("dueLabel", () => {
   it("gives a short date further out, and nothing for a broken date", () => {
     expect(dueLabel("2026-11-14", now, t, "en")).not.toBe("");
     expect(dueLabel("not a date", now, t, "en")).toBe("");
+    expect(dueLabel("2026-02-30", now, t, "en")).toBe("");
   });
 });
