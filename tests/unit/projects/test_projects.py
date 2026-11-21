@@ -417,3 +417,81 @@ async def test_the_project_tool_creates_links_and_reports(store, ledger) -> None
         assert not missing.success and "No such project" in missing.error
     finally:
         set_engine(None)
+
+
+async def test_project_tool_binds_an_existing_ide_project_workspace(
+    store, ledger, tmp_path, monkeypatch
+) -> None:
+    folder = tmp_path / "SMITH"
+    folder.mkdir()
+    monkeypatch.setattr(
+        "dodaios.agentic_ide.library.list_projects",
+        lambda include_archived=False: [
+            SimpleNamespace(id="ide_smith", path=str(folder), name="SMITH")
+        ],
+    )
+    engine = _engine(store, Clock(), evaluator=_evaluator())
+    set_engine(engine)
+    try:
+        project = _create(engine)
+        result = await ProjectTool().execute(
+            {"action": "workspace", "project_id": project.id, "folder": str(folder)}, _ctx()
+        )
+        assert result.success
+        assert result.output["workspace"] == {
+            "folder": str(folder.resolve()),
+            "project_id": "ide_smith",
+            "project_name": "SMITH",
+        }
+        persisted = store.get(project.id)
+        assert persisted.workspace_path == str(folder.resolve())
+        assert persisted.workspace_project_id == "ide_smith"
+    finally:
+        set_engine(None)
+
+
+async def test_project_tool_refuses_an_unregistered_workspace(store, ledger, tmp_path) -> None:
+    folder = tmp_path / "other"
+    folder.mkdir()
+    engine = _engine(store, Clock(), evaluator=_evaluator())
+    set_engine(engine)
+    try:
+        project = _create(engine)
+        result = await ProjectTool().execute(
+            {"action": "workspace", "project_id": project.id, "folder": str(folder)}, _ctx()
+        )
+        assert not result.success
+        assert "Agentic IDE" in result.error
+        assert not store.get(project.id).workspace_path
+    finally:
+        set_engine(None)
+
+
+async def test_project_tool_binds_a_durable_saved_workspace(
+    store, ledger, tmp_path, monkeypatch
+) -> None:
+    folder = tmp_path / "SMITH"
+    folder.mkdir()
+    monkeypatch.setattr("dodaios.agentic_ide.library.list_projects", lambda **_: [])
+    monkeypatch.setattr(
+        "dodaios.agentic_ide.resume_store.load",
+        lambda: SimpleNamespace(
+            workspaces=[
+                SimpleNamespace(
+                    folder=str(folder), project_id="ide_saved", name="SMITH Baseline Audit"
+                )
+            ]
+        ),
+    )
+    engine = _engine(store, Clock(), evaluator=_evaluator())
+    set_engine(engine)
+    try:
+        project = _create(engine)
+        result = await ProjectTool().execute(
+            {"action": "workspace", "project_id": project.id, "folder": str(folder)}, _ctx()
+        )
+        assert result.success
+        assert result.output["workspace"]["project_id"] == "ide_saved"
+        assert result.output["workspace"]["folder"] == str(folder.resolve())
+    finally:
+        set_engine(None)

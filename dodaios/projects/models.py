@@ -70,6 +70,11 @@ class Project(BaseModel):
     criteria: list[str] = Field(default_factory=list)
     status: ProjectStatus = "active"
     owner_session: str = ""
+    #: The explicit Agentic IDE destination for coding-agent work.  Long-horizon
+    #: project ids and IDE project ids are different namespaces, so never infer it.
+    workspace_path: str = ""
+    workspace_project_id: str = ""
+    workspace_project_name: str = ""
     subgoals: list[SubGoal] = Field(default_factory=list)
     created_ms: int
     updated_ms: int

@@ -185,6 +185,17 @@ class ProjectEngine:
         project.updated_ms = self._clock()
         self.store.save(project)
 
+    def bind_workspace(
+        self, project_id: str, *, path: str, ide_project_id: str, ide_project_name: str
+    ) -> Project:
+        """Persist an explicit long-horizon-project to Agentic IDE association."""
+        project = self._must_get(project_id)
+        project.workspace_path = path
+        project.workspace_project_id = ide_project_id
+        project.workspace_project_name = ide_project_name
+        self._save(project)
+        return project
+
     # ------------------------------------------------------------------ write calls
 
     def create(
@@ -546,6 +557,17 @@ class ProjectEngine:
             "goal": project.goal,
             "criteria": project.criteria,
             "progress": f"{done} of {len(project.subgoals)} sub-goals done",
+            **(
+                {
+                    "workspace": {
+                        "folder": project.workspace_path,
+                        "project_id": project.workspace_project_id,
+                        "project_name": project.workspace_project_name,
+                    }
+                }
+                if project.workspace_path
+                else {}
+            ),
             **({"decision": project.decision} if project.decision else {}),
             **({"closed": project.close_note} if project.close_note else {}),
             "subgoals": [

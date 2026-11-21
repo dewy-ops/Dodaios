@@ -509,12 +509,14 @@ class ResourceSampler:
                 if one in self._owned_tools
             }
         victims: list[Any] = []
+        roots = 0
         for pid in wanted:
             try:
                 process = psutil.Process(pid)
                 if abs(int(process.create_time()) - started[pid]) > 1:
                     continue  # the id was reused by another process
                 victims.extend([*process.children(recursive=True), process])
+                roots += 1
             except psutil.Error:  # it ended by itself, which is what was asked for
                 continue
         for process in victims:
@@ -528,7 +530,10 @@ class ResourceSampler:
                 process.kill()
             except psutil.Error:  # it ended between the wait and the kill
                 continue
-        return len(victims)
+        # The API ends tool handles, not operating-system descendants.  Windows
+        # may give a console-backed tool an extra child; that is reaped above
+        # but must not make one requested tool look like two were targeted.
+        return roots
 
 
 def _row_lines(lines: tuple[deque[float | None], ...]) -> dict[str, list[float | None]]:

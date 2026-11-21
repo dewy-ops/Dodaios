@@ -11,6 +11,7 @@ from typing import Any
 # Where the user's running work outside one conversation is read, by section:
 # the catalog tool that knows it and the arguments for its compact listing.
 BOARD_SOURCES: tuple[tuple[str, str, dict[str, Any]], ...] = (
+    ("projects", "project", {"action": "list", "detail": True}),
     ("coding_agents", "workspace-orchestrate", {"action": "status"}),
     ("missions", "missions-list", {"active": True, "limit": 20}),
     ("team", "society_status", {"board": True}),
@@ -32,6 +33,9 @@ def board_section(section: str, output: Any) -> Any:
         if not isinstance(output, dict) or output.get("status") != "ok":
             return None
         return {key: output[key] for key in ("counts", "needs_you", "workspaces") if key in output}
+    if section == "projects":
+        rows = output.get("projects") if isinstance(output, dict) else None
+        return rows if isinstance(rows, list) else None
     if section in ("missions", "tasks"):
         response = output.get("response") if isinstance(output, dict) else None
         rows = response.get(section) if isinstance(response, dict) else None
@@ -77,7 +81,7 @@ def compact_section(section: str, rows: Any) -> Any:
     if section == "team" and isinstance(rows, list):
         working = [r for r in rows if isinstance(r, dict) and r.get("state") == "working"]
         return {"working": working, "idle": len(rows) - len(working)}
-    if section in ("missions", "tasks") and isinstance(rows, list):
+    if section in ("missions", "tasks", "projects") and isinstance(rows, list):
         return [_clip(row) for row in rows]
     return rows
 

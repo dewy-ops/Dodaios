@@ -219,6 +219,75 @@ async def test_unknown_pane_returns_the_clarification_and_sends_nothing() -> Non
     assert [c["action"] for c in pane.calls] == ["resolve"]
 
 
+async def test_coding_agent_clarification_never_fabricates_a_running_job(_ledger) -> None:
+    workspace = Fake(
+        "workspace-orchestrate",
+        ToolResult(
+            True,
+            {
+                "status": "needs_clarification",
+                "reason": "Choose the project folder.",
+                "candidates": [{"project_id": "smith", "folder": "C:/repo/SMITH"}],
+            },
+        ),
+    )
+    result = await _tool(workspace).execute(
+        {"target": "coding_agent:Codex", "task": "build it"}, _ctx()
+    )
+    assert not result.success
+    assert result.output["state"] == "needs_clarification"
+    assert result.output["job_id"] is None
+    assert _ledger.recent(limit=10) == []
+
+
+async def test_long_horizon_project_uses_its_bound_workspace(monkeypatch) -> None:
+    workspace = Fake(
+        "workspace-orchestrate",
+        ToolResult(
+            True,
+            {
+                "status": "created",
+                "deliveries": [{"status": "accepted", "job_id": "job_bound"}],
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "dodaios.brain.delegate_tool._project_workspace",
+        lambda project_id: "C:/repo/SMITH" if project_id == "prj_stock" else None,
+    )
+    result = await _tool(workspace).execute(
+        {
+            "target": "coding_agent:Codex",
+            "task": "build it",
+            "options": {"project": "prj_stock"},
+        },
+        _ctx(),
+    )
+    assert result.success and result.output["job_id"] == "job_bound"
+    assert workspace.calls[0]["folder"] == "C:/repo/SMITH"
+    assert "project" not in workspace.calls[0]
+
+
+async def test_coding_agent_without_a_worker_receipt_is_blocked_not_running(_ledger) -> None:
+    workspace = Fake(
+        "workspace-orchestrate",
+        ToolResult(True, {"status": "created", "agents": [{"name": "Codex"}]}),
+    )
+    result = await _tool(workspace).execute(
+        {
+            "target": "coding_agent:Codex",
+            "task": "build it",
+            "options": {"folder": "C:/repo/SMITH"},
+        },
+        _ctx(),
+    )
+    assert result.success
+    assert result.output["state"] == "blocked"
+    job = _ledger.get(result.output["job_id"])
+    assert job is not None and job.state == "blocked"
+    assert "no completion evidence" in job.summary
+
+
 async def test_team_thread_target_starts_a_thread_and_asks_first() -> None:
     team = Fake("team_thread", ToolResult(True, {"team_id": "t1", "job_id": "job_team1"}))
     tool = _tool(team)
