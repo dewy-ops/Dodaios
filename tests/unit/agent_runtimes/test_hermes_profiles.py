@@ -117,10 +117,17 @@ def test_a_turn_runs_with_its_profile_as_hermes_home(roots):
 def test_the_setup_job_prepares_the_shared_root_once_per_build(roots, monkeypatch):
     monkeypatch.setattr(hermes, "_binary", lambda: "hermes")
     runtime = hermes.HermesRuntime()
+    status = RuntimeStatus(
+        "hermes", "Hermes", installed=True, ready=True, version="0.21.5", build="v1 abc"
+    )
+    monkeypatch.setattr(runtime, "detect", lambda **_: status)
     argv, env = runtime.prepare_command() or ([], {})
-    assert argv == ["hermes", "profile", "list"]  # passes Hermes' launch preparation
+    if hermes.is_windows():
+        assert argv == ["hermes", "--run-module", "acp_adapter", "--check"]
+        assert env["UV_NATIVE_TLS"] == "1"
+    else:
+        assert argv == ["hermes", "profile", "list"]
     assert Path(env["HERMES_HOME"]).parent == hermes.hermes_root() / "profiles"
-    status = RuntimeStatus("hermes", "Hermes", installed=True, ready=True, build="v1 abc")
     assert runtime.needs_prepare(status)
     runtime.mark_prepared(status)
     assert not runtime.needs_prepare(status)

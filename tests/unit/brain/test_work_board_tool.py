@@ -42,6 +42,21 @@ _TEAM = {
         {"agent": "Archivist", "state": "idle"},
     ]
 }
+_PROJECTS = {
+    "projects": [
+        {
+            "id": "prj_stock",
+            "title": "Stock Trading Framework",
+            "status": "active",
+            "progress": "0 of 2 sub-goals done",
+            "workspace": {"folder": "C:/repo/SMITH", "project_id": "ide_smith"},
+            "subgoals": [
+                {"id": "research", "title": "Research", "state": "running", "job_id": "j1"},
+                {"id": "build", "title": "Build", "state": "pending"},
+            ],
+        }
+    ]
+}
 
 
 class _Fake:
@@ -69,6 +84,7 @@ def _tools(**overrides):
         "missions-list": _Fake("missions-list", _MISSIONS),
         "tasks-list": _Fake("tasks-list", _TASKS),
         "society_status": _Fake("society_status", _TEAM),
+        "project": _Fake("project", _PROJECTS),
     }
     tools.update(overrides)
     return tools
@@ -85,6 +101,8 @@ async def test_the_board_puts_needs_you_first_and_reads_every_source():
     ]
     assert tools["society_status"].calls == [{"board": True}]
     assert tools["missions-list"].calls == [{"active": True, "limit": 20}]
+    assert tools["project"].calls == [{"action": "list", "detail": True}]
+    assert board["projects"][0]["subgoals"][0]["job_id"] == "j1"
     assert board["tasks"] == [{"task_id": "t-1", "title": "Daily brief", "state": "running"}]
 
 

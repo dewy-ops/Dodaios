@@ -32,7 +32,8 @@ class WorkBoardTool:
     risk_tier = "safe"
     is_action_tool = False
     description = (
-        "One board of everything running for the user and who needs them: coding agents "
+        "One board of everything running for the user and who needs them: long-horizon "
+        "projects with their evidence-backed sub-goals, coding agents "
         "in the Agentic IDE with each workspace's git state, the missions that have not "
         "ended, running routines and the agent team's working members. needs_you comes "
         "first and names what is waiting for the user (an agent showing a question or "

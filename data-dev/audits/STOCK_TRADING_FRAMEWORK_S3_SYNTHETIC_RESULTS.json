@@ -1,0 +1,12 @@
+{
+  "dataset": "synthetic-verification-only",
+  "hypothesis": "H1: RSI(2) < 10 and close > SMA(200)",
+  "losses": 0,
+  "maximum_drawdown": 0.0,
+  "portfolio_model": "equal-weight completed trades grouped by exit session",
+  "sharpe_ratio": 0.0,
+  "ties": 0,
+  "trades": 1,
+  "win_rate": 1.0,
+  "wins": 1
+}

@@ -419,6 +419,24 @@ class DelegateTool:
                 **({"refs": options["refs"]} if options.get("refs") else {}),
             }
         elif kind == "coding_agent":
+            project_ref = str(options.get("project") or options.get("project_id") or "")
+            if project_ref.startswith("prj_"):
+                folder = _project_workspace(project_ref)
+                if not folder:
+                    return _answer(
+                        target,
+                        "needs_clarification",
+                        None,
+                        False,
+                        error=(
+                            f"Project {project_ref} has no Agentic IDE workspace. Use project "
+                            "action 'workspace' with an existing Agentic IDE folder first."
+                        ),
+                        detail={"project_id": project_ref, "missing": ["workspace"]},
+                    )
+                options.pop("project", None)
+                options.pop("project_id", None)
+                options["folder"] = folder
             under = {
                 "action": "create",
                 "prompt": _brief(task, context, criteria),
@@ -525,8 +543,18 @@ class DelegateTool:
         data = result.output if isinstance(result.output, dict) else None
         artifacts_id = _find_job_id(list(result.artifacts))
         job_id = _find_job_id(result.output) or artifacts_id
+        status = str((data or {}).get("status") or (data or {}).get("state") or "")
+        if status in ("needs_clarification", "refused", "failed"):
+            state = status
+            return _answer(
+                target,
+                state,
+                job_id,
+                False,
+                error=result.error or _first_text(result.output),
+                detail=data if data is not None else result.output,
+            )
         if not result.success:
-            status = str((data or {}).get("status") or (data or {}).get("state") or "")
             state = (
                 "needs_clarification"
                 if status == "needs_clarification"
@@ -537,9 +565,17 @@ class DelegateTool:
                 error=result.error or _first_text(result.output),
                 detail=data if data is not None else result.output,
             )
-        if not job_id:
+        used_fallback = not job_id
+        if used_fallback:
             job_id = self._ledger_fallback(kind, target, summary_task, ctx, under)
-        state = str((data or {}).get("state") or "running")
+        state = str((data or {}).get("state") or "")
+        if not state:
+            state = {
+                "completed": "done",
+                "done": "done",
+                "cancelled": "cancelled",
+                "interrupted": "interrupted",
+            }.get(status, "blocked" if used_fallback and kind == "coding_agent" else "running")
         if state not in jobs.STATES:
             state = "running"
         readiness = _readiness_of(data) if kind == "routine" else None
@@ -575,10 +611,7 @@ class DelegateTool:
         kind: str, target: str, task: str, ctx: ExecutionContext, under: dict[str, Any]
     ) -> str | None:
         """A job row for a hand-off whose implementation wrote none."""
-        state = (
-            "running" if kind in ("mission", "team_thread", "agent", "coding_agent")
-            else "blocked"
-        )
+        state = "running" if kind in ("mission", "team_thread", "agent") else "blocked"
         job_id = jobs.start(
             _LEDGER_KIND[kind], target=target, title=task[:120], ctx=ctx, state=state,
         )
@@ -598,6 +631,14 @@ def _brief(task: str, context: str, criteria: str) -> str:
     if criteria:
         brief += "\n\nCompletion criteria:\n" + criteria
     return brief
+
+
+def _project_workspace(project_id: str) -> str | None:
+    """Resolve only an explicit durable association; never guess by project name."""
+    from dodaios.projects.store import get_store
+
+    project = get_store().get(project_id)
+    return project.workspace_path if project and project.workspace_path else None
 
 
 async def _run(tool: Any, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:

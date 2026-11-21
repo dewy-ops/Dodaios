@@ -13,6 +13,7 @@ independent evaluator judges the success criteria met on that evidence.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Final
 
 from dodaios.core.protocols import ExecutionContext, ToolResult
@@ -22,7 +23,7 @@ log = logging.getLogger(__name__)
 
 _READS: Final[frozenset[str]] = frozenset({"status", "list"})
 _ACTIONS: Final[tuple[str, ...]] = (
-    "create", "plan", "link", "note", "status", "list", "pause", "resume", "close",
+    "create", "plan", "link", "note", "workspace", "status", "list", "pause", "resume", "close",
 )
 
 _SUBGOAL_SCHEMA: Final[dict[str, Any]] = {
@@ -58,7 +59,9 @@ class ProjectTool:
         "actions: create (title, goal, criteria[] = how we know it is met, subgoals[] with id, "
         "title, owner, depends_on, evidence), plan (project_id + subgoals[] to add or edit "
         "pending ones, drop[] to skip, criteria[]), link (project_id, subgoal_id, job_id: "
-        "attach the job you started for a ready sub-goal), note, status (project_id: refreshes "
+        "attach the job you started for a ready sub-goal), note, workspace (project_id + "
+        "folder: explicitly bind an existing Agentic IDE project as the coding-agent "
+        "destination), status (project_id: refreshes "
         "from the jobs ledger and says which sub-goals are ready; without project_id lists "
         "open projects), pause, resume, close (outcome complete: only when every sub-goal is "
         "done and an independent check says the criteria are met, else it tells what is "
@@ -84,6 +87,14 @@ class ProjectTool:
             "subgoal_id": {"type": "string", "description": "link/note: the sub-goal."},
             "job_id": {"type": "string", "description": "link: the job_id a hand-off returned."},
             "text": {"type": "string", "description": "note: why, or what to try next."},
+            "folder": {
+                "type": "string",
+                "description": "workspace: path of an existing Agentic IDE project.",
+            },
+            "detail": {
+                "type": "boolean",
+                "description": "list: include every sub-goal and workspace association.",
+            },
             "outcome": {"type": "string", "enum": ["complete", "abandon"]},
             "reason": {"type": "string", "description": "close abandon: why."},
             "review_every_hours": {
@@ -140,7 +151,12 @@ class ProjectTool:
     @staticmethod
     async def _run(engine: Any, action: str, pid: str, args: dict[str, Any], session: str) -> Any:
         if action == "list" or (action == "status" and not pid):
-            return {"projects": engine.summaries()}
+            projects = (
+                [engine.view(project) for project in engine.store.list(open_only=True)]
+                if args.get("detail") is True
+                else engine.summaries()
+            )
+            return {"projects": projects}
         if action == "create":
             goal = str(args.get("goal") or "").strip()
             if not goal:
@@ -182,6 +198,52 @@ class ProjectTool:
             project = await engine.note(
                 pid, str(args.get("subgoal_id") or ""), str(args.get("text") or ""),
                 session=session,
+            )
+            return engine.view(project)
+        if action == "workspace":
+            folder = Path(str(args.get("folder") or "")).expanduser()  # noqa: ASYNC240
+            if not folder.is_absolute() or not folder.is_dir():
+                raise ProjectError("workspace needs an existing absolute folder.")
+            resolved = folder.resolve()
+            from dodaios.agentic_ide import library, resume_store
+
+            ide_project = next(
+                (
+                    item
+                    for item in library.list_projects(include_archived=False)
+                    if Path(item.path).resolve() == resolved  # noqa: ASYNC240
+                ),
+                None,
+            )
+            if ide_project is None:
+                saved = resume_store.load()
+                saved_workspace = next(
+                    (
+                        item
+                        for item in (saved.workspaces if saved else [])
+                        if Path(item.folder).resolve() == resolved  # noqa: ASYNC240
+                    ),
+                    None,
+                )
+                if saved_workspace is not None:
+                    ide_project = library.Project(
+                        id=(
+                            saved_workspace.project_id
+                            or library.project_id_for(saved_workspace.folder)
+                        ),
+                        path=saved_workspace.folder,
+                        name=Path(saved_workspace.folder).name or saved_workspace.folder,
+                    )
+            if ide_project is None:
+                raise ProjectError(
+                    "That folder is not an active Agentic IDE project. Open or select it in "
+                    "Agentic IDE first, then bind it explicitly."
+                )
+            project = engine.bind_workspace(
+                pid,
+                path=str(resolved),
+                ide_project_id=str(ide_project.id),
+                ide_project_name=str(ide_project.name),
             )
             return engine.view(project)
         if action in ("pause", "resume"):

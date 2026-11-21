@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -42,6 +43,7 @@ class _IO:
         self.started = time.monotonic()
         #: Seconds from the turn's start to its first answer text.
         self.first_text_s: float | None = None
+        self.exit_code: int | None = None
 
     async def write(self, frame: dict[str, Any]) -> None:
         assert self.proc.stdin is not None
@@ -120,8 +122,16 @@ async def _run(name: str, turn: RuntimeTurn, text: str) -> tuple[AcpTurn, _IO]:
                     if acp.saw_result and not proc.stdin.is_closing():
                         proc.stdin.close()
 
-            await asyncio.wait_for(pump(), timeout=180)
-            await asyncio.wait_for(proc.wait(), timeout=30)
+            async def pump_warm_stderr() -> None:
+                if launch.proc is not None:
+                    while raw := await launch.proc.stderr.readline():
+                        stderr.write(raw)
+
+            await asyncio.wait_for(asyncio.gather(pump(), pump_warm_stderr()), timeout=180)
+            io.exit_code = await asyncio.wait_for(proc.wait(), timeout=30)
+            if not acp.saw_result:
+                acp.status = "error"
+                acp.error = f"Runtime exited ({io.exit_code}) before returning an ACP result."
             return acp, io
     finally:
         if failure is not None:
@@ -143,6 +153,29 @@ async def _run(name: str, turn: RuntimeTurn, text: str) -> tuple[AcpTurn, _IO]:
 def _report(label: str, io: _IO) -> None:
     first = f"{io.first_text_s:.2f} s" if io.first_text_s is not None else "never"
     print(f"{label}: first answer text after {first}")
+
+
+async def recovered_turn(
+    name: str, turn: RuntimeTurn, text: str
+) -> tuple[bool, AcpTurn, _IO]:
+    """Reopen the persisted session in a new process before sending the probe."""
+    runtime = driver(name)
+    await runtime.stop()
+    started = time.monotonic()
+    ready = await runtime.warm(turn)
+    print(f"warm-up: {ready} in {time.monotonic() - started:.1f} s")
+    answer, io = await _run(name, turn, text)
+    if (
+        name == "hermes"
+        and os.name == "nt"
+        and io.exit_code == 0xC0000005
+        and not answer.saw_result
+    ):
+        print("Hermes exited with Windows access violation 0xC0000005. Reopening the session once.")
+        await runtime.stop()
+        ready = await runtime.warm(turn)
+        answer, io = await _run(name, turn, text)
+    return ready, answer, io
 
 
 def _key_on_disk(root: Path, key: str) -> bool:
@@ -189,30 +222,78 @@ async def prepare(name: str) -> float:
     argv, env = command
     started = time.monotonic()
     tree = make_process_tree("runtime-e2e-prepare")
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        env=env,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        creationflags=NO_WINDOW_CREATIONFLAGS,
-        start_new_session=os.name != "nt",
-    )
-    tree.assign(proc.pid)
-    try:
-        code = await asyncio.wait_for(proc.wait(), timeout=1800)
-    finally:
-        tree.close()
+    log = base.runtimes_root().parent / "prepare.log"
+    with log.open("ab") as stream:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            env=env,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=stream,
+            stderr=stream,
+            creationflags=NO_WINDOW_CREATIONFLAGS,
+            start_new_session=os.name != "nt",
+        )
+        try:
+            tree.assign(proc.pid)
+            code = await asyncio.wait_for(proc.wait(), timeout=1800)
+        finally:
+            tree.close()
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await asyncio.wait_for(proc.wait(), timeout=10)
     elapsed = time.monotonic() - started
     print(f"prepare: exit {code} in {elapsed:.1f} s")
-    if code == 0:
-        driver(name).mark_prepared(driver(name).detect(refresh=True))
+    if code != 0:
+        raise RuntimeError(f"{name} preparation exited {code}. See {log}")
+    driver(name).mark_prepared(driver(name).detect(refresh=True))
     return elapsed
 
 
+def probe_directory(name: str, check: str) -> Path:
+    # Hermes adds a generation and site-packages below this root. Keep the
+    # Windows path below MAX_PATH even when long-path support is disabled.
+    prefix = (
+        "he-" if name == "hermes" and os.name == "nt" else f"dodaios-{name}-{check}-e2e-"
+    )
+    return Path(tempfile.mkdtemp(prefix=prefix))
+
+
+def probe_runtimes_root(tmp: Path) -> Path:
+    return tmp / ("r" if os.name == "nt" else "agent_runtimes")
+
+
+def finish_profile(tmp: Path, result: int) -> None:
+    if result:
+        print("Failed runtime profile kept:", tmp)
+        return
+    if os.name == "nt":
+        path = str(tmp.absolute())
+        path = "\\\\?\\UNC\\" + path[2:] if path.startswith("\\\\") else "\\\\?\\" + path
+        shutil.rmtree(path)
+    else:
+        shutil.rmtree(tmp)
+
+
 async def main(name: str) -> int:
-    tmp = Path(tempfile.mkdtemp(prefix=f"jarvis-{name}-e2e-"))
-    base.runtimes_root = lambda: tmp / "agent_runtimes"  # keep the real data dir clean
+    tmp = probe_directory(name, "driver")
+    previous_root = base.runtimes_root
+    base.runtimes_root = lambda: probe_runtimes_root(tmp)
+    result = 1
+    try:
+        result = await _check(name, tmp)
+        return result
+    finally:
+        try:
+            await driver(name).stop()
+            finish_profile(tmp, result)
+        finally:
+            base.runtimes_root = previous_root
+
+
+async def _check(name: str, tmp: Path) -> int:
     workspace = tmp / "workspace"
     workspace.mkdir()
     keep_user_path()  # before detect(): it would run the app's PATH cleanup
@@ -245,12 +326,18 @@ async def main(name: str) -> int:
             mcp_url=mcp_url or None,
             control_key=get_control_key() if mcp_url else None,
         )
-        opening = (
-            'CALL_TOOL society_wiki_note {"kind": "memory", "target": "user", '
-            '"text": "Favourite food: lasagne (runtime e2e)"}'
-            if mcp_url
-            else "first message"
-        )
+        tool_marker = "HERMES_TOOL_E2E"
+        if mcp_url:
+            opening = (
+                'CALL_TOOL society_wiki_note {"kind": "memory", "target": "user", '
+                '"text": "Favourite food: lasagne (runtime e2e)"}'
+            )
+        elif name == "hermes":
+            fixture = workspace / "probe.txt"
+            fixture.write_text(tool_marker, encoding="utf-8")
+            opening = "CALL_TOOL read_file " + json.dumps({"path": str(fixture)})
+        else:
+            opening = "first message"
         started = time.monotonic()
         first, io1 = await _run(name, turn, opening)
         print(f"turn 1 took {time.monotonic() - started:.1f} s")
@@ -266,6 +353,14 @@ async def main(name: str) -> int:
             print("  ", {k: str(v)[-700:] for k, v in call.items() if k in ("name", "output")})
         print("turn 1:", first.status, first.error, repr(first.result_text[:80]))
         print("  vendor session:", first.vendor_session)
+        tool_ok = (
+            name != "hermes" or bool(mcp_url)
+            or any(
+                e["kind"] == "tool_result" and tool_marker in str(e["payload"].get("output", ""))
+                for e in io1.events
+            )
+        )
+        print("  native file tool verified:", tool_ok if name == "hermes" and not mcp_url else "n/a")
         turn.resume = first.vendor_session
         second, io2 = await _run(name, turn, "second message")
         print("turn 2:", second.status, second.error, repr(second.result_text[:80]))
@@ -275,17 +370,13 @@ async def main(name: str) -> int:
         _report("turn 2 (warm process)", io2)
         # The app restarted (or the agent idled out): the chat is opened, the
         # runtime warms up while it is read, then the message is sent.
-        await driver(name).stop()
         turn.resume = second.vendor_session
-        warmed = time.monotonic()
-        ready = await driver(name).warm(turn)
-        print(f"warm-up: {ready} in {time.monotonic() - warmed:.1f} s")
-        third, io3 = await _run(name, turn, "third message")
+        ready, third, io3 = await recovered_turn(name, turn, "third message")
         print("turn 3:", third.status, third.error, repr(third.result_text[:80]))
         _report("turn 3 (after warm-up)", io3)
     # Stopped first: a running Gateway holds some of its files open.
     await driver(name).stop()
-    secret_leak = _key_on_disk(tmp / "agent_runtimes", key)
+    secret_leak = _key_on_disk(base.runtimes_root(), key)
     # Only a fixed word is printed: never anything derived from the key.
     print("  key written to disk:", "YES" if secret_leak else "no")
     path_kept = user_path_snapshot() == path_before
@@ -294,6 +385,16 @@ async def main(name: str) -> int:
         first.status == "done"
         and second.status == "done"
         and third.status == "done"
+        and (
+            name != "hermes"
+            or (
+                bool(first.vendor_session)
+                and first.vendor_session == second.vendor_session == third.vendor_session
+                and ready
+                and "third message" in third.result_text
+            )
+        )
+        and tool_ok
         and history > 2
         and not secret_leak
         and path_kept
