@@ -501,9 +501,12 @@ def main_ci_state(ctx: Ctx, sha: str) -> tuple[str, str]:
     """
     workflows = [str(w) for w in ctx.config.get("main_workflows") or []]
     data = ctx.gh_json(
-        ["api", f"repos/{ctx.repo}/actions/runs?branch={ctx.base}&event=push&per_page=100"]
+        ["api", f"repos/{ctx.repo}/actions/runs?branch={ctx.base}&per_page=100"]
     )
     runs = data.get("workflow_runs", []) if isinstance(data, dict) else []
+    # ci.yml documents a workflow_dispatch on main as the stand-in when a
+    # credential-mediated push is intentionally suppressed by GitHub Actions.
+    runs = [run for run in runs if run.get("event") in {"push", "workflow_dispatch"}]
     if workflows:
         runs = [r for r in runs if r.get("path") in workflows or r.get("name") in workflows]
     by_workflow: dict[str, list[dict]] = {}
