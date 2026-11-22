@@ -156,13 +156,19 @@ def gate_ci(conclusion: str | None, status: str = "COMPLETED") -> dict:
     return {"name": "CI gate", "status": status, "conclusion": conclusion}
 
 
-def main_run(sha: str, conclusion: str | None, status: str = "completed") -> dict:
+def main_run(
+    sha: str,
+    conclusion: str | None,
+    status: str = "completed",
+    event: str = "push",
+) -> dict:
     return {
         "path": ".github/workflows/ci.yml",
         "name": "CI",
         "head_sha": sha,
         "status": status,
         "conclusion": conclusion,
+        "event": event,
         "created_at": "2026-10-19T10:00:00Z",
         "html_url": "https://example.invalid/run",
     }
@@ -402,6 +408,13 @@ def test_merged_green_on_main_and_local_main_fast_forwarded_is_done(world: FakeW
         "D5": True,
     }
     assert ["git", "merge", "--ff-only", "--quiet", "origin/main"] in world.commands
+
+
+def test_green_main_dispatch_fallback_is_done(world: FakeWorld) -> None:
+    world.branch("claude/x")
+    world.pr("claude/x", state="MERGED", mergeCommit={"oid": MERGE_SHA})
+    world.main_runs = [main_run(MERGE_SHA, "success", event="workflow_dispatch")]
+    assert run_gate(world, ["claude/x"]).verdict == "DONE"
 
 
 def test_a_cancelled_main_run_is_forgiven_by_a_later_green_run(world: FakeWorld) -> None:
