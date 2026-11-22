@@ -830,6 +830,14 @@ class WorkspaceOrchestrator:
             if isinstance(opened, dict):
                 return opened
             fallback = opened
+            if args.get("_authorization_required"):
+                return {
+                    "status": "authorization_required",
+                    "success": False,
+                    "reason": fallback or (
+                        "An isolated coding thread is unavailable; shared-pane fallback was denied."
+                    ),
+                }
         graph = await asyncio.to_thread(self.graph)
         refs = {
             "project": str(args.get("project_id") or args.get("project") or ""),
@@ -1668,6 +1676,14 @@ class WorkspaceOrchestrator:
             if isinstance(opened, dict):
                 return opened
             fallback = opened
+            if args.get("_authorization_required"):
+                return {
+                    "status": "authorization_required",
+                    "success": False,
+                    "reason": fallback or (
+                        "An isolated coding thread is unavailable; shared-pane fallback was denied."
+                    ),
+                }
         if not folder and project_ref:
             owners = _best(
                 project_ref, graph["projects"], lambda p: ((p["id"], p["path"]), (p["name"],))

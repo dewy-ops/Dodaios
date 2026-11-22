@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS agent_chat_sessions (
     last_message_ms  INTEGER NOT NULL DEFAULT 0,
     speed            TEXT NOT NULL DEFAULT '',
     started_by       TEXT NOT NULL DEFAULT '',
-    build_mode       TEXT NOT NULL DEFAULT ''
+    build_mode       TEXT NOT NULL DEFAULT '',
+    authorization_json TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS agent_chat_events (
     session_id  TEXT NOT NULL,
@@ -239,6 +240,8 @@ class AgentChatSession:
     #: pill names. Set only while the session is in Plan; empty there means
     #: the ladder's default.
     build_mode: str = ""
+    #: Immutable execution authority for an unattended delegated worker.
+    authorization_json: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -365,6 +368,11 @@ class AgentChatStore:
             self._conn.execute(
                 "ALTER TABLE agent_chat_sessions ADD COLUMN build_mode TEXT NOT NULL DEFAULT ''"
             )
+        if "authorization_json" not in have:
+            self._conn.execute(
+                "ALTER TABLE agent_chat_sessions ADD COLUMN authorization_json "
+                "TEXT NOT NULL DEFAULT ''"
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -445,6 +453,8 @@ class AgentChatStore:
         computer_id: str = "",
         speed: str = "",
         build_mode: str = "",
+        authorization_json: str = "",
+        started_by: str = "",
     ) -> AgentChatSession:
         if surface not in SURFACES:
             raise ValueError(f"surface must be one of {SURFACES}, not {surface!r}")
@@ -458,7 +468,8 @@ class AgentChatStore:
                 "INSERT INTO agent_chat_sessions (session_id, title, provider, model, effort, "
                 "cwd, permission_mode, vendor_session, created_ms, updated_ms, message_count, "
                 "preview, surface, account_id, runtime, computer_id, last_message_ms, speed, "
-                "build_mode) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 0, '', ?, ?, ?, ?, ?, ?, ?)",
+                "started_by, build_mode, authorization_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 0, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     sid,
                     title,
@@ -475,8 +486,10 @@ class AgentChatStore:
                     computer_id,
                     now,
                     speed,
+                    started_by,
                     # Only a session that starts in Plan has a mode to return to.
                     build_mode if mode in _PLAN_MODES else "",
+                    authorization_json,
                 ),
             )
             self._conn.commit()
@@ -1358,4 +1371,9 @@ class AgentChatStore:
             speed=str(row["speed"] or "") if "speed" in row.keys() else "",
             started_by=str(row["started_by"] or "") if "started_by" in row.keys() else "",
             build_mode=str(row["build_mode"] or "") if "build_mode" in row.keys() else "",
+            authorization_json=(
+                str(row["authorization_json"] or "")
+                if "authorization_json" in row.keys()
+                else ""
+            ),
         )

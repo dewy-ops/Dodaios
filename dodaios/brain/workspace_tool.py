@@ -365,8 +365,33 @@ class WorkspaceOrchestrationTool:
         from dodaios.agentic_ide.dispatch_intent import dispatch_context
         from dodaios.core.image_references import get_store, scope_for
 
+        action = str(args.get("action") or "")
+        if action in {"create", "open_workspace"} and str(args.get("mode") or "").lower() == "grid":
+            return ToolResult(
+                False,
+                {
+                    "status": "authorization_required",
+                    "reason": (
+                        "Delegated work cannot start in a shared terminal grid. Start an "
+                        "isolated chat thread; a person may open an interactive grid directly."
+                    ),
+                },
+            )
+        if action in {"send", "respond", "keys", "restart", "fork"} and not str(
+            args.get("terminal_id") or ""
+        ).startswith("thread:"):
+            return ToolResult(
+                False,
+                {
+                    "status": "authorization_required",
+                    "reason": (
+                        "Automated delegation may address only an isolated authorized thread, "
+                        "not a shared or interactive terminal pane."
+                    ),
+                },
+            )
         scope = scope_for(ctx.config, ctx.trace_id)
-        if args.get("action") in {"send", "create", "open_workspace"} and args.get("prompt"):
+        if action in {"send", "create", "open_workspace"} and args.get("prompt"):
             # Only pictures of the message being answered ask for a choice; an
             # earlier one of the chat stays selectable without blocking every
             # later work order for a day.
@@ -391,6 +416,11 @@ class WorkspaceOrchestrationTool:
         try:
             result = await self.gateway.run(
                 {**args, "_image_scope": scope,
+                 **(
+                     {"mode": "chat", "_authorization_required": True}
+                     if action in {"create", "open_workspace"}
+                     else {}
+                 ),
                  **dispatch_context(ctx.user_utterance, ctx.config, str(ctx.trace_id))},
                 trace_id=str(ctx.trace_id),
             )
@@ -403,6 +433,13 @@ class WorkspaceOrchestrationTool:
         result = _point_at_jarvis_agent(args, result)
         return ToolResult(
             success=result.get("success") is not False
-            and status not in {"uncertain", "unavailable", "stale_target", "not_accepted"},
+            and status
+            not in {
+                "authorization_required",
+                "uncertain",
+                "unavailable",
+                "stale_target",
+                "not_accepted",
+            },
             output=result,
         )

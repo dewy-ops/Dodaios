@@ -322,7 +322,8 @@ class CodingThreadTool:
         "agents (the coding agents on this computer, their models), projects (known project "
         "folders), open (start a thread: agent, folder = absolute project path or project "
         "name, prompt = a complete, self-contained brief you write, optional model, effort, "
-        "title; the thread runs with full access), send (a follow-up into your thread), "
+        "title; the thread runs in an isolated authorized workspace), send (a follow-up "
+        "into your thread), "
         "read (the "
         "thread's transcript; pass after=<cursor> for news only), answer (the thread's open "
         "question card: answers = one string per question, an option label or your own "
@@ -453,7 +454,10 @@ class CodingThreadTool:
             )
         return {
             "coding_agents": rows,
-            "access": "Threads you open run with full access: no approval prompts.",
+            "access": (
+                "Threads you open run in isolated workspaces with scoped file tools. "
+                "Git publication and paths outside that workspace are not authorized."
+            ),
         }
 
     async def _do_projects(self, service: Any, agent: Any, args: dict[str, Any]) -> dict[str, Any]:
@@ -499,16 +503,39 @@ class CodingThreadTool:
                     return {**_thread_card(service, session), "note": "Already open."}
         await asyncio.to_thread(_ensure_project, folder)
         runner = resolve_runner(row.id, surface=THREAD_SURFACE)
+        from dodaios.agent_chat.authorization import (
+            AuthorizationViolation,
+            audit_payload,
+            prepare_delegated_workspace,
+        )
+        from dodaios.agent_chat.events import make_event
+
+        if runner != "codex-cli":
+            raise AuthorizationViolation(
+                "Automated coding threads currently require Codex because the selected "
+                "worker has no enforceable workspace-isolation adapter."
+            )
+        task_id = uuid4().hex
+        isolated, envelope = await asyncio.to_thread(
+            prepare_delegated_workspace,
+            folder,
+            task_id=task_id,
+            worker=runner,
+        )
         session = service.create_session(
             provider=row.id,
             model=match_model(row, str(args.get("model") or "")),
             effort=(str(args["effort"]).strip() or None) if args.get("effort") else None,
-            cwd=folder,
-            # The maintainer's choice: an agent's coding threads never stop for
-            # approvals, so they always run in the runner's bypass mode.
-            permission_mode=access_mode(runner, "full"),
+            cwd=str(isolated),
+            permission_mode="auto",
             title=_clip(str(args.get("title") or ""), 80),
             surface=THREAD_SURFACE,
+            started_by=self.agent_id,
+            authorization_json=envelope.dumps(),
+        )
+        service.store.append_event(
+            session.session_id,
+            make_event("authorization_created", audit_payload(envelope)),
         )
         service.store.set_thread_owner(
             session.session_id,

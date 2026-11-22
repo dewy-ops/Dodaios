@@ -231,20 +231,42 @@ class ChatThreads:
         new thread before a slow start can outlive the request.
         """
         from dodaios.agent_chat.service import resolve_runner
-        from dodaios.society.coding_threads import access_mode, match_model
+        from dodaios.society.coding_threads import match_model
 
         service = self._chat()
         runner = resolve_runner(row.id, surface=THREAD_SURFACE)
+        from dodaios.agent_chat.authorization import (
+            AuthorizationViolation,
+            audit_payload,
+            prepare_delegated_workspace,
+        )
+        from dodaios.agent_chat.events import make_event
+
+        if runner != "codex-cli":
+            raise AuthorizationViolation(
+                "Automated coding threads currently require Codex because the selected "
+                "worker has no enforceable workspace-isolation adapter."
+            )
+        task_id = uuid4().hex
+        isolated, envelope = prepare_delegated_workspace(
+            folder, task_id=task_id, worker=runner
+        )
         session = service.create_session(
             provider=row.id,
             model=match_model(row, model),
             effort=effort.strip() or None,
-            cwd=folder,
-            # The app's default access mode, the one a grid pane opens in too
-            # (for Claude Code and Codex that is the mode that never asks).
-            permission_mode=access_mode(runner, "build"),
+            cwd=str(isolated),
+            # Delegated work is sandboxed. Git publication authority is never
+            # inferred from a request to edit files.
+            permission_mode="auto",
             title=_clip(title, 80),
             surface=THREAD_SURFACE,
+            started_by="jarvis",
+            authorization_json=envelope.dumps(),
+        )
+        service.store.append_event(
+            session.session_id,
+            make_event("authorization_created", audit_payload(envelope)),
         )
         from . import thread_finder
 

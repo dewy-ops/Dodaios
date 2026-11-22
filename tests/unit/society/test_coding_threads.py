@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from dodaios.agent_chat.authorization import AuthorizationEnvelope
 from dodaios.agent_chat.events import make_event
 from dodaios.agent_chat.service import AgentChatService
 from dodaios.agent_chat.store import AgentChatStore
@@ -101,6 +102,10 @@ async def society(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     projects: list[str] = []
     monkeypatch.setattr(coding_threads, "_installed_clis", installed)
     monkeypatch.setattr(coding_threads, "_ensure_project", projects.append)
+    monkeypatch.setattr(
+        "dodaios.agent_chat.authorization.user_data_dir",
+        lambda: tmp_path.parent / f"{tmp_path.name}-data",
+    )
     service = ScriptedService(AgentChatStore(":memory:"))
     rt = Society(service)
     rt.projects = projects
@@ -135,8 +140,7 @@ async def open_thread(
     rt.service.next_thread_steps = steps
     rt.service.next_thread_setup = setup
     result = await tool(rt).execute(
-        {"action": "open", "agent": "Claude Code", "folder": str(folder), "prompt": prompt,
-         "model": "Opus 5.5"},
+        {"action": "open", "agent": "Codex", "folder": str(folder), "prompt": prompt},
         None,
     )
     assert result.success, result.error
@@ -146,24 +150,26 @@ async def open_thread(
 async def test_open_starts_a_thread_the_person_can_watch(
     society: Society, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    # The Claude row runs on the CLI when it is installed, else on the API,
-    # whose ladder tops out at "auto". Pin the CLI so the check does not depend
-    # on what the test machine has installed.
+    # Automated workers use the Codex isolation adapter regardless of what is
+    # installed on the test machine.
     import dodaios.agent_chat.service as chat_service
 
-    monkeypatch.setattr(chat_service, "resolve_runner", lambda *_a, **_k: "claude-cli")
+    monkeypatch.setattr(chat_service, "resolve_runner", lambda *_a, **_k: "codex-cli")
     rt = society
     rt_service = rt.service
     thread = await open_thread(rt, tmp_path)
     session = rt_service.store.get_session(thread)
     assert session.surface == "agent"
     folder = await asyncio.to_thread(tmp_path.resolve)
-    assert session.cwd == str(folder)
-    assert session.model == "claude-opus-5-5"
-    assert session.permission_mode == "bypassPermissions"
+    envelope = AuthorizationEnvelope.loads(session.authorization_json)
+    assert envelope.source_root == str(folder)
+    assert session.cwd == envelope.workspace_root and session.cwd != str(folder)
+    assert session.model == ""
+    assert session.permission_mode == "auto"
     assert rt.projects == [str(folder)]
-    first = rt_service.store.list_events(thread)[0]
-    assert first["kind"] == "user_message"
+    events = rt_service.store.list_events(thread)
+    assert events[0]["kind"] == "authorization_created"
+    first = next(event for event in events if event["kind"] == "user_message")
     # The thread shows the agent's own words and who wrote them.
     assert first["payload"]["text"] == "Add a login page"
     assert session.title == "Add a login page"
@@ -188,7 +194,7 @@ async def test_a_finished_thread_wakes_its_owner_with_the_answer(
     assert "Added login.tsx" in owner_prompts[0]
     assert "[coding thread update]" in owner_prompts[0]
     incoming = [e for e in rt.service.store.list_events(rt.owner) if e["kind"] == "agent_message"]
-    assert incoming[-1]["payload"]["text"].startswith("Claude Code finished")
+    assert incoming[-1]["payload"]["text"].startswith("Codex finished")
 
 
 async def test_a_turn_the_person_typed_does_not_wake_the_agent(
@@ -369,7 +375,7 @@ async def test_a_retried_open_is_the_same_thread(society: Society, tmp_path: Pat
     assert first == second
 
 
-async def test_threads_run_with_full_access_and_open_without_a_card():
+async def test_threads_open_without_a_card_but_use_an_authorization_envelope():
     t = CodingThreadTool(SimpleNamespace(), "nova")
     assert t.risk_tier_for_args({"action": "open"}) == "monitor"
     assert "access" not in t.schema["properties"]

@@ -86,7 +86,9 @@ class WorkspaceGitTool:
         self.gateway = gateway
 
     def risk_tier_for_args(self, args: dict) -> str:
-        return "safe" if args.get("op") in _READS else "monitor"
+        # A coding assignment never implies source-control publication
+        # authority. Every mutation receives its own trace-bound approval.
+        return "safe" if args.get("op") in _READS else "ask"
 
     def read_only_for_args(self, args: dict) -> bool:
         return args.get("op") in _READS

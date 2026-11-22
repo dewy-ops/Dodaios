@@ -376,7 +376,7 @@ class Executor:
         return await tool.execute(args, ctx)
 
 
-async def test_live_roundtrip_uses_gateway_executor_and_durable_addressed_receipt(rig, tmp_path):
+async def test_live_roundtrip_denies_shared_pane_delegation(rig, tmp_path):
     executor = Executor()
     tool = WorkspaceOrchestrationTool(rig[0])
     gateway = BrainSupervisorToolGateway(
@@ -410,9 +410,10 @@ async def test_live_roundtrip_uses_gateway_executor_and_durable_addressed_receip
         # The resolved display labels are UI metadata, not accepted send fields.
         args = {k: v for k, v in args.items() if k in tool.schema["properties"]}
         receipt = await live.execute("send", tool.name, args, 0)
-        assert receipt["success"] and receipt["output"]["status"] == "accepted"
+        assert not receipt["success"]
+        assert receipt["output"]["status"] == "authorization_required"
         assert (await live.execute("send", tool.name, args, 0)) == receipt
-        assert len(rig[2].calls) == 1
+        assert len(rig[2].calls) == 0
         assert len(executor.calls) == 2
         denied = await gateway.execute(
             tool.name, args, SupervisorToolRequest(uuid4(), "mission", "Task")
