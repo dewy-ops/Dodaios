@@ -5,10 +5,16 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-from dodaios.backtesting import BacktestEngine, Bar, OversoldUptrendStrategy
+# Support the documented ``python scripts/backtest_stock_h1.py`` invocation.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from dodaios.backtesting import BacktestEngine, Bar, OversoldUptrendStrategy  # noqa: E402
 
 
 def load_csv(path: Path) -> list[Bar]:

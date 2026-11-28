@@ -59,3 +59,22 @@ This stage performed offline calculations only. It did not access a broker or ac
 credentials, submit an order, simulate an order against an account, download market data, or run a
 paper/live execution path. The synthetic JSON receipt is stored at
 `data-dev/audits/STOCK_TRADING_FRAMEWORK_S3_SYNTHETIC_RESULTS.json`.
+
+## Continuation review (2026-11-27)
+
+The implementation was re-run from a clean checkout using the commands above. The documented
+script entry point now resolves the repository package when invoked directly. Seven focused tests
+pass, covering RSI, MACD, volume profile, a known drawdown and Sharpe value, next-open/third-close
+timing, overlap suppression, exact-hurdle tie handling, daily-cap ordering, and corrupt/non-finite
+input rejection.
+
+The review also corrected the selection sequence so a signal from a symbol with an already-open
+position is removed before the daily cap is applied. This prevents an ignored repeat signal from
+displacing another eligible security. The engine now consumes a structural `BacktestStrategy`
+protocol rather than the H1 class directly, preserving separation between the reusable historical
+calculator, signal policy, and any execution layer.
+
+The synthetic result is unchanged: one trade, one win, no losses or ties, 100% win rate, 0%
+maximum drawdown, and a 0.0 Sharpe ratio because one return cannot estimate volatility. This is a
+mechanical verification result only. With no approved historical snapshot in the repository, H1
+still has no empirical acceptance or falsification result.
