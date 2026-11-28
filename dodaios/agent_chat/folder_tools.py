@@ -94,6 +94,22 @@ def folder_tools(cwd: Path, *, stance: str = "ask") -> dict[str, Tool]:
     return out
 
 
+def authorized_delegation_tools(cwd: Path) -> dict[str, Tool]:
+    """File-only hands for an authorization-enveloped coding thread.
+
+    The envelope pre-authorizes edits inside this isolated workspace. Native
+    shell execution is deliberately absent because it cannot be contained on
+    the supported Windows sandbox without also inheriting local network and
+    credential reach.
+    """
+
+    allowed = {"Read", "Ls", "Glob", "Grep", "Write", "Edit"}
+    tools = {name: tool for name, tool in folder_tools(cwd).items() if name in allowed}
+    for name in ("Write", "Edit"):
+        tools[name].risk_tier = "safe"
+    return tools
+
+
 def plan_filter(tools: dict[str, Tool]) -> dict[str, Tool]:
     """Plan mode's tool surface: whatever only reads.
 
@@ -106,4 +122,11 @@ def plan_filter(tools: dict[str, Tool]) -> dict[str, Tool]:
     return {name: tool for name, tool in tools.items() if allows_read(tool)}
 
 
-__all__ = ["FOLDER_RISK_TIERS", "PLAN_STANCE", "FolderTool", "folder_tools", "plan_filter"]
+__all__ = [
+    "FOLDER_RISK_TIERS",
+    "PLAN_STANCE",
+    "FolderTool",
+    "authorized_delegation_tools",
+    "folder_tools",
+    "plan_filter",
+]

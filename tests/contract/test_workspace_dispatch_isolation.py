@@ -12,14 +12,36 @@ from dodaios.agentic_ide.dispatch_intent import dispatch_context
 from dodaios.agentic_ide.orchestration import WorkspaceOrchestrator
 from dodaios.agentic_ide.session import SessionError
 from dodaios.brain.tool_gateway import BrainSupervisorToolGateway
-from dodaios.brain.workspace_tool import WorkspaceOrchestrationTool
-from dodaios.core.protocols import ExecutionContext
+from dodaios.brain.workspace_tool import (
+    WorkspaceOrchestrationTool as SecureWorkspaceOrchestrationTool,
+)
+from dodaios.core.protocols import ExecutionContext, ToolResult
 from dodaios.live.state import LiveLedger
 from dodaios.live.tools import LiveTools
 from tests.contract import test_workspace_orchestration as support
 
 rig = support.rig
 runnable = support.runnable
+
+
+class WorkspaceOrchestrationTool(SecureWorkspaceOrchestrationTool):
+    """Exercise the internal pane orchestrator without the external security boundary.
+
+    The production brain tool now denies shared panes. These older tests still
+    cover the orchestrator's receipt/deduplication behavior as a separate layer.
+    """
+
+    async def execute(self, args, ctx):
+        result = await self.gateway.run(
+            {**args, **dispatch_context(ctx.user_utterance, ctx.config, str(ctx.trace_id))},
+            trace_id=str(ctx.trace_id),
+        )
+        status = result.get("status")
+        return ToolResult(
+            success=result.get("success") is not False
+            and status not in {"uncertain", "unavailable", "stale_target", "not_accepted"},
+            output=result,
+        )
 
 
 def context(text="Start a new Codex session here to fix audio mute.", revision=1):
@@ -43,6 +65,26 @@ def create_args(**extra):
         "prompt": "Fix output mute",
         **extra,
     }
+
+
+async def test_brain_cannot_delegate_into_a_shared_grid() -> None:
+    tool = SecureWorkspaceOrchestrationTool(SimpleNamespace(run=None))
+    result = await tool.execute(
+        {"action": "create", "mode": "grid", "cli": "Codex", "prompt": "Edit files"},
+        context(),
+    )
+    assert not result.success
+    assert result.output["status"] == "authorization_required"
+
+
+async def test_brain_cannot_send_work_to_an_interactive_pane() -> None:
+    tool = SecureWorkspaceOrchestrationTool(SimpleNamespace(run=None))
+    result = await tool.execute(
+        {"action": "send", "terminal_id": "pane:shared", "prompt": "Run git push"},
+        context(),
+    )
+    assert not result.success
+    assert result.output["status"] == "authorization_required"
 
 
 @pytest.mark.parametrize(

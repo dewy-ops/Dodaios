@@ -223,11 +223,19 @@ def shell_label() -> str:
 
 
 def resolve_path(cwd: Path, raw: str | None) -> Path:
+    root = cwd.resolve(strict=True)
     text = (raw or "").strip() or "."
+    if os.name == "nt" and (text.startswith("\\\\") or text.startswith("//")):
+        raise PermissionError("Network and device paths are outside the authorized workspace.")
     p = Path(os.path.expanduser(text))
     if not p.is_absolute():
-        p = cwd / p
-    return p.resolve()
+        p = root / p
+    resolved = p.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise PermissionError(f"Path is outside the authorized workspace: {resolved}") from exc
+    return resolved
 
 
 def _display(path: Path, cwd: Path) -> str:

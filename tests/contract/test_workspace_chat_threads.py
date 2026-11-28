@@ -192,7 +192,12 @@ async def test_a_new_agent_opens_as_a_chat_thread_not_a_pane(rig: Rig):
     assert agent["terminal_id"].startswith("thread:") and agent["cli"] == "codex"
     [thread] = rig.threads()
     assert agent["terminal_id"] == "thread:" + thread.session_id
-    assert thread.surface == "agent" and thread.cwd == rig.workspace.folder
+    from dodaios.agent_chat.authorization import AuthorizationEnvelope
+
+    envelope = AuthorizationEnvelope.loads(thread.authorization_json)
+    assert thread.surface == "agent" and thread.cwd == envelope.workspace_root
+    assert envelope.source_root == rig.workspace.folder
+    assert thread.cwd != rig.workspace.folder
     assert [d["status"] for d in result["deliveries"]] == ["accepted"]
     assert result["success"] is True
     await rig.settle()
@@ -254,32 +259,28 @@ async def test_the_result_asks_to_link_the_agent_inside_the_reply_sentence(rig: 
         assert words in LINK_IN_SENTENCE, words
 
 
-async def test_a_thread_opens_in_the_pane_stance_not_with_full_access(rig: Rig):
-    from dodaios.agent_chat.permissions import default_permission
-    from dodaios.agent_chat.service import resolve_runner
-
+async def test_a_thread_records_the_scoped_auto_stance_not_full_access(rig: Rig):
     await create(rig)
 
     [thread] = rig.threads()
-    runner = resolve_runner(thread.provider, surface="agent")
-    assert thread.permission_mode == default_permission(runner)
+    assert thread.permission_mode == "auto"
+    assert thread.authorization_json
 
 
-async def test_the_model_and_effort_asked_for_are_the_threads(rig: Rig):
+async def test_worker_without_an_isolation_adapter_is_denied(rig: Rig):
     result = await create(rig, cli="Claude Code", model="Opus 5.5", effort="high")
 
-    assert result["status"] == "created" and result["mode"] == "chat", result
-    [thread] = rig.threads()
-    assert thread.model == "claude-opus-5-5" and thread.effort == "high"
-    assert result["agents"][0]["model"] == "claude-opus-5-5"
+    assert result["status"] == "not_accepted", result
+    assert "no enforceable workspace-isolation adapter" in result["reason"]
+    assert rig.threads() == []
 
 
-async def test_a_model_alone_names_the_coding_agent(rig: Rig):
+async def test_a_model_alone_cannot_select_an_unisolated_worker(rig: Rig):
     # "A Fable 5.2 agent": no CLI was said, the model belongs to Claude Code.
     result = await create(rig, cli=None, model="Opus 5.5")
 
-    assert result["agents"][0]["cli"] == "claude", result
-    assert rig.threads()[0].model == "claude-opus-5-5"
+    assert result["status"] == "not_accepted", result
+    assert rig.threads() == []
 
 
 async def test_open_workspace_starts_threads_in_the_folder_not_a_grid_workspace(
@@ -293,15 +294,19 @@ async def test_open_workspace_starts_threads_in_the_folder_not_a_grid_workspace(
 
     result = await rig.orchestrator.run({
         "action": "open_workspace", "folder": str(fresh), "name": "web Chip",
-        "agents": [{"cli": "Claude Code", "model": "Opus 5.5", "effort": "max"}],
+        "agents": [{"cli": "Codex", "effort": "high"}],
         "prompt": "Design a chip",
     })
 
     assert result["status"] == "created" and result["mode"] == "chat", result
     assert len(rig.registry.sessions) == workspaces
     [thread] = rig.threads()
-    assert thread.cwd == str(fresh.resolve()) and thread.model == "claude-opus-5-5"
-    assert thread.effort == "max"
+    from dodaios.agent_chat.authorization import AuthorizationEnvelope
+
+    envelope = AuthorizationEnvelope.loads(thread.authorization_json)
+    assert envelope.source_root == str(fresh.resolve())
+    assert thread.cwd == envelope.workspace_root and thread.cwd != str(fresh.resolve())
+    assert thread.effort == "high"
     assert [d["status"] for d in result["deliveries"]] == ["accepted"]
     assert any(p.path == str(fresh.resolve()) for p in library.list_projects())
     await rig.settle()
@@ -365,7 +370,11 @@ async def test_a_named_project_needs_no_open_workspace(rig: Rig, tmp_path):
 
     assert result["status"] == "created", result
     [thread] = rig.threads()
-    assert thread.cwd == str(tmp_path / "Website")
+    from dodaios.agent_chat.authorization import AuthorizationEnvelope
+
+    assert AuthorizationEnvelope.loads(thread.authorization_json).source_root == str(
+        tmp_path / "Website"
+    )
     assert result["workspace_id"] == "" and result["project"] == "Website"
 
 
@@ -376,7 +385,13 @@ async def test_a_folder_names_the_place_and_becomes_a_project(rig: Rig, tmp_path
     result = await create(rig, folder=str(fresh))
 
     assert result["status"] == "created", result
-    assert rig.threads()[0].cwd == str(fresh.resolve())
+    from dodaios.agent_chat.authorization import AuthorizationEnvelope
+
+    thread = rig.threads()[0]
+    assert AuthorizationEnvelope.loads(thread.authorization_json).source_root == str(
+        fresh.resolve()
+    )
+    assert thread.cwd != str(fresh.resolve())
     [project] = [p for p in library.list_projects() if p.path == str(fresh.resolve())]
     # The receipt names the project the thread is listed under: an empty name
     # reads as "this folder is in no project yet" and gets reported that way.

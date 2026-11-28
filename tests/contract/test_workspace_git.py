@@ -169,7 +169,7 @@ def test_reads_are_safe_and_changes_are_logged_actions(rig):
     for op in ("worktree_create", "worktree_archive", "worktree_restore", "commit", "push",
                "pull_request"):
         jsonschema.validate({"op": op}, tool.schema)
-        assert tool.risk_tier_for_args({"op": op}) == "monitor"
+        assert tool.risk_tier_for_args({"op": op}) == "ask"
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"op": "state", "folder": "C:/elsewhere"}, tool.schema)
 

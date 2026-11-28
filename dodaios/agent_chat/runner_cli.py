@@ -5029,6 +5029,18 @@ async def _run_cli_once(
     if not await _await_lingering(session.session_id, getattr(handle, "cancel", None)):
         return _Outcome("cancelled", None, {}, None, None)
     cwd = _resolved_cwd(session.cwd or Path.home())
+    from dodaios.agent_chat.authorization import AuthorizationViolation, validate_launch
+
+    try:
+        authorization = validate_launch(session, runner, cwd)
+    except AuthorizationViolation as exc:
+        await handle.emit(
+            make_event(
+                "authorization_violation",
+                {"reason": str(exc), "runner": runner, "cwd": str(cwd)},
+            )
+        )
+        return _Outcome("error", str(exc), {}, None, None)
     effort = normalize_effort(session.provider, session.effort)
     # The picked model's own levels when the catalog knows them (``None`` =
     # the provider ladder applies); see ``effort_for_model``.
@@ -5046,6 +5058,16 @@ async def _run_cli_once(
     # A plain chat's instructions open every conversation the CLI starts,
     # the one a lost resume falls back to included.
     planned_prompt = plain_chat.cli_prompt(handle, user_text, resume)
+    if authorization is not None:
+        planned_prompt = (
+            "<authorization_envelope>\n"
+            "You may read and edit only this detached workspace through the "
+            "smith_authorized_files MCP tools. Native shell, web, apps, credentials, "
+            "commits, pushes, pull requests, merges, and paths outside the workspace are "
+            "not authorized. Do not claim any of those actions completed.\n"
+            "</authorization_envelope>\n\n"
+            + planned_prompt
+        )
     # Set once planning succeeded; an external runtime's plan holds a turn slot.
     plan: CliPlan | None = None
     is_thread = getattr(session, "surface", "agent") != "society"
@@ -5156,6 +5178,14 @@ async def _run_cli_once(
                 # A thread that plans may go on in "Bypass permissions".
                 allow_bypass_after_plan(plan.argv, runner, session)
                 await asyncio.to_thread(_carry_thread_conversation, runner, resume, plan.env)
+            if authorization is not None:
+                from dodaios.agent_chat.authorization import (
+                    codex_stdio_config_args,
+                    harden_codex_plan,
+                )
+
+                harden_codex_plan(plan.argv, plan.env, authorization)
+                plan.argv += codex_stdio_config_args(authorization)
             apply_child_env_drops(session.session_id, plan.env)
             if getattr(handle, "tools_disabled", False):
                 from .native_control import disable_cli_tools

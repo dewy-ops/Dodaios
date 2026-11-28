@@ -1214,6 +1214,8 @@ class AgentChatService:
         computer_id: str = "",
         speed: str = "",
         build_mode: str = "",
+        authorization_json: str = "",
+        started_by: str = "",
     ) -> AgentChatSession:
         row = provider_row(provider)
         if row is None and not supports_api_runner(provider):
@@ -1250,6 +1252,8 @@ class AgentChatService:
             computer_id=computer_id,
             speed=normalize_speed(speed),
             build_mode=build,
+            authorization_json=authorization_json,
+            started_by=started_by,
         )
 
     def _keep_conversation(self, session_id: str, vendor: str) -> None:
