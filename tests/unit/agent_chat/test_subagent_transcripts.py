@@ -42,8 +42,8 @@ def _item(ordinal: int, payload: dict[str, Any], kind: str = "response_item") ->
     }
 
 
-def _write(home: Path, thread: str, lines: list[dict[str, Any]], day: str = "2026/09/26") -> None:
-    folder = home / "sessions" / Path(day)
+def _write(home: Path, thread: str, lines: list[dict[str, Any]], day: str | None = None) -> None:
+    folder = home / "sessions" / Path(day or datetime.now(UTC).strftime("%Y/%m/%d"))
     folder.mkdir(parents=True, exist_ok=True)
     body = "\n".join(json.dumps(line) for line in lines) + "\n"
     (folder / f"rollout-2026-09-26T19-22-24-{thread}.jsonl").write_text(body, encoding="utf-8")
